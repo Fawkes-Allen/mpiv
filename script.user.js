@@ -39,6 +39,7 @@
 // @connect     fbcdn.com
 // @connect     flickr.com
 // @connect     gfycat.com
+// @connect     redgifs.com
 // @connect     googleusercontent.com
 // @connect     gyazo.com
 // @connect     imgur.com
@@ -1674,8 +1675,14 @@ const Ruler = {
         u: '||gfycat.com/',
         r: /(gfycat\.com\/)(gifs\/detail\/|iframe\/)?([a-z]+)/i,
         s: 'https://$1$3',
-        q: 'meta[content$=".webm"], #webmsource, source[src$=".webm"], .actual-gif-image',
+        q: 'meta[content$=".webm"], meta[content$=".mp4"], #webmsource, source[src$=".webm"], source[src$=".mp4"], .actual-gif-image',
       },
+       {
+       u: '||redgifs.com/',
+       r: /(redgifs\.com\/)(gifs\/detail\/|iframe\/|watch\/)?([a-z,\/]+)/i,
+       s: 'https://$1watch\/$3',
+       q: 'meta[content$=".webm"], meta[content$=".mp4"], #webmsource, source[src$=".webm"], source[src$=".mp4"], .actual-gif-image',
+     },
       {
         u: [
           '||googleusercontent.com/proxy',
