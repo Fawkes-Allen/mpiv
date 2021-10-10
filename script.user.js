@@ -913,6 +913,9 @@ const Events = {
       case 'KeyD':
         Remoting.saveFile();
         break;
+      case 'KeyC':
+        GM.setClipboard(Util.tabFixUrl() || p.src);
+        break;
       case 'KeyH': // flip horizontally
       case 'KeyV': // flip vertically
       case 'KeyL': // rotate left
