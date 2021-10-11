@@ -1,9 +1,9 @@
-A fork of [MPIV](https://greasyfork.org/en/scripts/404-mouseover-popup-image-viewer/) (Mouseover Popup Image Viewer).
+A fork of Toph's fork of [MPIV](https://greasyfork.org/en/scripts/404-mouseover-popup-image-viewer/) (Mouseover Popup Image Viewer).
 
 ### Installation
 
 * on GreasyFork: [link](https://greasyfork.org/scripts/394820)
-* directly from GitHub: [script.user.js](https://github.com/tophf/mpiv/raw/master/script.user.js) (Tampermonkey/Violentmonkey/Greasemonkey should be installed first)
+* directly from GitHub: [script.user.js](https://github.com/Fawkes-Allen/mpiv/raw/master/script.user.js) (Tampermonkey/Violentmonkey/Greasemonkey should be installed first)
 
 ### Usage
 
