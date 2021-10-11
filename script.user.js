@@ -22,7 +22,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.8
+// @version     1.2.9
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -1482,10 +1482,9 @@ const Ruler = {
         },
       },
       dotDomain.endsWith('.instagram.com') && {
-        e: [
-          'a[href*="/p/"]',
-          'article [role="button"][tabindex="0"], article [role="button"][tabindex="0"] div',
-        ],
+        e: 'a[href*="/p/"],' +
+          'article [role="button"][tabindex="0"],' +
+          'article [role="button"][tabindex="0"] div',
         s: (m, node, rule) => {
           let data, a, n, img, src;
           if (location.pathname.startsWith('/p/')) {
@@ -2024,7 +2023,11 @@ const Ruler = {
     ];
 
     /** @type mpiv.HostRule[] */
-    Ruler.rules = [].concat(customRules, disablers, perDomain, main).filter(Boolean);
+    (Ruler.rules = [].concat(customRules, disablers, perDomain, main).filter(Boolean))
+      .forEach(rule => {
+        if (Array.isArray(rule.e))
+          rule.e = rule.e.join(',');
+      });
   },
 
   format(rule, {expand} = {}) {
@@ -2065,8 +2068,13 @@ const Ruler = {
         let {e} = rule;
         if (typeof e === 'string') {
           e = e.trim();
-        } else if (e && !Object.entries(e).filter(Ruler.isValidE2).length) {
-          throw new Error('Invalid syntax for "e". Example: ' +
+        } else if (
+          Array.isArray(e) && !e.every((s, i) => typeof s === 'string' && (e[i] = s.trim())) ||
+          e && !Object.entries(e).filter(Ruler.isValidE2).length
+        ) {
+          throw new Error('Invalid syntax for "e". Examples: ' +
+            '"e": ".image" or ' +
+            '"e": [".image1", ".image2"] or ' +
             '"e": {".parent": ".image"} or ' +
             '"e": {".parent1": ".image1", ".parent2": ".image2"}');
         }
