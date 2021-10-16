@@ -22,7 +22,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.9
+// @version     1.2.10
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -694,6 +694,7 @@ Config.DEFAULTS = /** @type mpiv.Config */ Object.assign(Object.create(null), {
   uiBorderOpacity: 100,
   uiBorder: 0,
   uiFadein: true,
+  uiFadeinGallery: true, // some computers show white background while loading so fading hides it
   uiShadowColor: '#000000',
   uiShadowOpacity: 80,
   uiShadow: 20,
@@ -1200,7 +1201,7 @@ const Menu = window === top && GM.registerMenuCommand && {
 const Popup = {
 
   async create(src, pageUrl) {
-    const inGallery = ai.gItems && ai.popup && !ai.zooming &&
+    const inGallery = !cfg.uiFadeinGallery && ai.gItems && ai.popup && !ai.zooming &&
       (ai.popup.dataset.galleryFlip = '') === '';
     Popup.destroy();
     ai.imageUrl = src;
@@ -3190,7 +3191,7 @@ async function setupRuleInstaller(e) {
 }
 
 function createConfigHtml() {
-  const MPIV_BASE_URL = 'https://github.com/tophf/mpiv/wiki/Rules';
+  const MPIV_BASE_URL = 'https://github.com/tophf/mpiv/wiki/';
   const scalesHint = 'Leave it empty and click Apply or OK to restore the default values.';
   const trimLeft = s => s.trim().replace(/\n\s+/g, '\r');
   return flattenHtml(`
@@ -3232,10 +3233,11 @@ function createConfigHtml() {
     justify-content: space-between;
   }
   li.row {
+    align-items: start;
     flex-wrap: wrap;
-    justify-content: flex-start;
   }
   li.row label {
+    display: flex;
     flex-direction: row;
     align-items: center;
   }
@@ -3259,7 +3261,7 @@ function createConfigHtml() {
     margin-right: 1em;
   }
   input, select {
-    min-height: 1.6em;
+    min-height: 1.3em;
     box-sizing: border-box;
   }
   input[type=checkbox] {
@@ -3333,6 +3335,7 @@ function createConfigHtml() {
   }
   a {
     text-decoration: none;
+    color: LinkText;
   }
   a:hover {
     text-decoration: underline;
@@ -3508,7 +3511,7 @@ function createConfigHtml() {
         <tr><th>Open in tab</th><td><kbd>t</kbd></td></tr>
       </table>
     </details>
-    <li class=options>
+    <li class="options stretch">
       <label>Popup shows on
         <select id=start>
           <option value=context>Right-click / &#8801; / Ctrl
@@ -3563,20 +3566,27 @@ function createConfigHtml() {
       </label>
     </li>
     <li class="options row">
-      <label title="...or try to keep the original link/thumbnail unobscured by the popup">
-        <input type=checkbox id=center>Centered*</label>
-      <label title="Provides smoother experience but increases network traffic">
-        <input type=checkbox id=preload>Preload on hover*</label>
-      <label title="...or show a partial image while still loading">
-        <input type=checkbox id=waitLoad>Show when fully loaded*</label>
-      <label><input type=checkbox id=uiFadein>Fade-in transition</label>
-      <label><input type=checkbox id=mute>Mute videos</label>
-      <label><input type=checkbox id=imgtab>Run in image tabs</label>
-      <label title="Causes slowdowns so don't enable unless you explicitly use it in your custom CSS">
-        <input type=checkbox id=globalStatus>Expose status on &lt;html&gt;*</label>
-      <label title="Disable only if you spoof the HTTP headers yourself">
-        <input type=checkbox id=xhr>Spoof hotlinking*</label>
-      <label style="width:100%"><input type=checkbox id=startAltShown>
+      <div>
+        <label title="...or try to keep the original link/thumbnail unobscured by the popup">
+          <input type=checkbox id=center>Centered*</label>
+        <label title="Provides smoother experience but increases network traffic">
+          <input type=checkbox id=preload>Preload on hover*</label>
+        <label><input type=checkbox id=imgtab>Run in image tabs</label>
+      </div>
+      <div>
+        <label><input type=checkbox id=mute>Mute videos</label>
+        <label title="Disable only if you spoof the HTTP headers yourself">
+          <input type=checkbox id=xhr>Spoof hotlinking*</label>
+        <label title="Causes slowdowns so don't enable unless you explicitly use it in your custom CSS">
+          <input type=checkbox id=globalStatus>Set status on &lt;html&gt;*</label>
+      </div>
+      <div>
+        <label title="...or show a partial image while still loading">
+          <input type=checkbox id=waitLoad>Show when fully loaded*</label>
+        <label><input type=checkbox id=uiFadein>Fade-in transition</label>
+        <label><input type=checkbox id=uiFadeinGallery>Fade-in transition in gallery</label>
+      </div>
+      <label><input type=checkbox id=startAltShown>
         Show a switch for 'auto-start' mode in userscript manager menu</label>
     </li>
     <li class="options stretch">
@@ -3609,9 +3619,9 @@ function createConfigHtml() {
       </label>
     </li>
     <li>
-      <a href="${MPIV_BASE_URL}css.html">Custom CSS:</a>&nbsp;
+      <a href="${MPIV_BASE_URL}Custom-CSS" target="_blank">Custom CSS:</a>&nbsp;
       e.g. <b>#mpiv-popup { animation: none !important }</b>
-      <a href="#" id=_reveal style="float: right"
+      <a tabindex=0 id=_reveal style="float: right"
          title="You can copy parts of it to override them in your custom CSS">
          View the built-in CSS</a>
       <div class=column>
@@ -3620,7 +3630,7 @@ function createConfigHtml() {
       </div>
     </li>
     <li style="display: flex; justify-content: space-between;">
-      <div><a href="${MPIV_BASE_URL}host_rules.html">Custom host rules:</a></div>
+      <div><a href="${MPIV_BASE_URL}Custom-host-rules" target="_blank">Custom host rules:</a></div>
       <div style="white-space: nowrap">
         To disable, put any symbol except <code>a..z 0..9 - .</code><br>
         in "d" value, for example <code>"d": "!foo.com"</code>
@@ -3638,7 +3648,7 @@ function createConfigHtml() {
       <div hidden id=_installLoading>Loading...</div>
       <div hidden id=_installHint>Double-click the rule (or select and press Enter) to add it
         . Click <code>Apply</code> or <code>OK</code> to confirm.</div>
-      <a href="${MPIV_BASE_URL}" id=_install>Install rule from repository...</a>
+      <a href="${MPIV_BASE_URL}Rules" id=_install target="_blank">Install rule from repository...</a>
     </li>
   </ul>
   <div style="text-align:center">
