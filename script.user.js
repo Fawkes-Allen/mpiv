@@ -22,7 +22,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.10
+// @version     1.2.11
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -84,7 +84,7 @@ const WHEEL_EVENT = 'onwheel' in doc ? 'wheel' : 'mousewheel';
 const SETTLE_TIME = 50;
 // used to detect JS code in host rules
 const RX_HAS_CODE = /(^|[^-\w])return[\W\s]/;
-const RX_MEDIA_URL = /^[^?]+?\.(bmp|jpe?g?|gif|mp4|png|svg|web[mp])($|\?)/i;
+const RX_MEDIA_URL = /^(?!data:)[^?#]+?\.(avif|bmp|jpe?g?|gif|mp4|png|svgz?|web[mp])($|[?#])/i;
 const ZOOM_MAX = 16;
 const SYM_U = Symbol('u');
 
@@ -741,7 +741,7 @@ const CspSniffer = {
     if (!csp) return;
     const src = {};
     const rx = /[\s;](default|img|media)-src ([^;]+)/g;
-    for (let m; (m = rx.exec(csp[1]));)
+    for (let m; (m = rx.exec(csp));)
       src[m[1]] = m[2].trim().split(/\s+/);
     if (!src.img) src.img = src.default || [];
     if (!src.media) src.media = src.default || [];
@@ -1610,8 +1610,9 @@ const Ruler = {
             m.input.replace(/~~60_\d+/, '~~60_57'),
       },
       {
-        u: '||fastpic.ru',
-        e: 'a',
+        u: '||fastpic.',
+        e: 'a[href*="fastpic"][href*=".html"]',
+        s: m => m[0].replace('http:', 'https:').replace('fastpic.ru', 'fastpic.org'),
         q: 'img[src*="/big/"]',
         xhr: true,
       },
@@ -2216,7 +2217,7 @@ const RuleMatcher = {
   adaptiveFind(node, opts) {
     const tn = node.tagName;
     const src = node.currentSrc || node.src;
-    const isPic = tn === 'IMG' || tn === 'VIDEO' && /\.(webm|mp4)(\?|$)/.test(src);
+    const isPic = tn === 'IMG' || tn === 'VIDEO' && Util.isVideoUrlExt(src);
     let a, info, url;
     // note that data URLs aren't passed to rules as those may have fatally ineffective regexps
     if (tn !== 'A') {
@@ -2466,7 +2467,7 @@ const Remoting = {
     if (/Content-Type:\s*(\S+)/i.test(responseHeaders) &&
         !RegExp.$1.includes('text/plain'))
       return RegExp.$1;
-    const ext = /\.([a-z0-9]+?)($|\?|#)/i.exec(finalUrl) ? RegExp.$1 : 'jpg';
+    const ext = Util.extractFileExt(finalUrl) || 'jpg';
     switch (ext.toLowerCase()) {
       case 'bmp': return 'image/bmp';
       case 'gif': return 'image/gif';
@@ -2696,6 +2697,8 @@ const Util = {
       keys.every(k => Util.deepEqual(a[k], b[k]));
   },
 
+  extractFileExt: url => (url = RX_MEDIA_URL.exec(url)) && url[1],
+
   forceLayout(node) {
     // eslint-disable-next-line no-unused-expressions
     node.clientHeight;
@@ -2731,10 +2734,9 @@ const Util = {
     return App.isImageTab || el.closest(':hover');
   },
 
-  isVideoUrl(url) {
-    return url.startsWith('data:video') ||
-           !url.startsWith('data:') && /\.(webm|mp4)($|\?)/.test(url);
-  },
+  isVideoUrl: url => url.startsWith('data:video') || Util.isVideoUrlExt(url),
+
+  isVideoUrlExt: url => (url = Util.extractFileExt(url)) && /^(webm|mp4)$/i.test(url),
 
   newFunction(...args) {
     try {
