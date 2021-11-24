@@ -5,6 +5,7 @@
 //
 // @include     *
 //
+// @grant       GM_addElement
 // @grant       GM_download
 // @grant       GM_getValue
 // @grant       GM_openInTab
@@ -22,7 +23,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.13
+// @version     1.2.14
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -63,6 +64,7 @@ let cfg;
 let ai = {rule: {}};
 /** @type Element */
 let elConfig;
+let nonce;
 
 const doc = document;
 const hostname = location.hostname;
@@ -84,6 +86,7 @@ const WHEEL_EVENT = 'onwheel' in doc ? 'wheel' : 'mousewheel';
 const SETTLE_TIME = 50;
 // used to detect JS code in host rules
 const RX_HAS_CODE = /(^|[^-\w])return[\W\s]/;
+const RX_EVAL_BLOCKED = /'Trusted(Script| Type)'|unsafe-eval/;
 const RX_MEDIA_URL = /^(?!data:)[^?#]+?\.(avif|bmp|jpe?g?|gif|mp4|png|svgz?|web[mp])($|[?#])/i;
 const ZOOM_MAX = 16;
 const SYM_U = Symbol('u');
@@ -91,7 +94,14 @@ const TRUSTED = (({trustedTypes}, policy) =>
   trustedTypes ? trustedTypes.createPolicy('mpiv', policy) : policy
 )(window, {
   createHTML: str => str,
+  createScript: str => str,
 });
+const FN_ARGS = {
+  s: ['m', 'node', 'rule'],
+  c: ['text', 'doc', 'node', 'rule'],
+  q: ['text', 'doc', 'node', 'rule'],
+  g: ['text', 'doc', 'url', 'm', 'rule', 'node', 'cb'],
+};
 //#endregion
 //#region GM4 polyfill
 
@@ -133,8 +143,6 @@ const App = {
     Calc.updateViewSize();
     Events.toggle(true);
     Events.trackMouse(event);
-    if (CspSniffer.init && location.protocol === 'https:')
-      CspSniffer.init();
     if (ai.force) {
       App.start();
     } else if (cfg.start === 'auto' && !rule.manual) {
@@ -195,7 +203,7 @@ const App = {
 
   async commit() {
     const p = ai.popup;
-    const isDecoded = cfg.waitLoad && typeof p.decode === 'function';
+    const isDecoded = cfg.waitLoad && isFunction(p.decode);
     if (isDecoded) {
       await p.decode();
       if (p !== ai.popup)
@@ -719,21 +727,27 @@ const CspSniffer = {
 
   /** @type {?Object<string,string[]>} */
   csp: null,
-  /** @type {?Promise<void>} */
-  initPending: null,
   selfUrl: location.origin + '/',
 
   // will be null when done
   init() {
-    this.initPending = this.initPending ||
-      fetch(location).catch(() => false).then(r => { // not using method HEAD as it breaks twitter
-        this.csp = r && this._parse(r.headers.get('content-security-policy'));
-        this.init = this.initPending = null;
-      });
+    this.init = new Promise(resolve => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('get', location);
+      xhr.onreadystatechange = () => {
+        if (xhr.readyState >= xhr.HEADERS_RECEIVED) {
+          this.csp = this._parse(xhr.getResponseHeader('content-security-policy'));
+          this.init = null;
+          xhr.abort();
+          resolve();
+        }
+      };
+      xhr.send();
+    });
   },
 
   async check(url) {
-    await this.initPending;
+    if (this.init) await this.init;
     const isVideo = Util.isVideoUrl(url);
     let mode;
     if (this.csp) {
@@ -747,9 +761,13 @@ const CspSniffer = {
   _parse(csp) {
     if (!csp) return;
     const src = {};
-    const rx = /[\s;](default|img|media)-src ([^;]+)/g;
+    const rx = /(?:^|[;,])\s*(?:(default|img|media|script)-src|require-(trusted)-types-for) ([^;,]+)/g;
     for (let m; (m = rx.exec(csp));)
-      src[m[1]] = m[2].trim().split(/\s+/);
+      src[m[1] || m[2]] = m[3].trim().split(/\s+/);
+    if ((src.script || []).find(s => /^'nonce-(.+)'$/.test(s)))
+      nonce = RegExp.$1;
+    if ((src.trusted || []).includes("'script'"))
+      App.NOP = () => {};
     if (!src.img) src.img = src.default || [];
     if (!src.media) src.media = src.default || [];
     for (const set of [src.img, src.media]) {
@@ -1077,14 +1095,8 @@ const Events = {
 
 const Gallery = {
 
-  functionParams: ['text', 'doc', 'url', 'm', 'rule', 'node', 'cb'],
-
   makeParser(g) {
-    return (
-      typeof g === 'function' ? g :
-        typeof g === 'string' ? Util.newFunction(...Gallery.functionParams, g) :
-          Gallery.defaultParser
-    );
+    return isFunction(g) ? g : Gallery.defaultParser;
   },
 
   findIndex(gUrl) {
@@ -1247,7 +1259,7 @@ const Popup = {
     if (!p) return;
     p.removeEventListener('load', Popup.onLoad);
     p.removeEventListener('error', App.handleError);
-    if (typeof p.pause === 'function')
+    if (isFunction(p.pause))
       p.pause();
     if (ai.blobUrl)
       setTimeout(URL.revokeObjectURL, SETTLE_TIME, ai.blobUrl);
@@ -1368,8 +1380,50 @@ const Ruler = {
   init() {
     const errors = new Map();
     const customRules = (cfg.hosts || []).map(Ruler.parse, errors);
-    for (const rule of errors.keys())
-      App.handleError('Invalid custom host rule:', rule);
+    const hasGMAE = typeof GM_addElement === 'function';
+    const canEval = nonce || hasGMAE;
+    const evalId = canEval && `${GM_info.script.name}${Math.random()}`;
+    const evalRules = [];
+    const evalCode = [`window[${JSON.stringify(evalId)}]=[`];
+    for (const [rule, err] of errors.entries()) {
+      if (!RX_EVAL_BLOCKED.test(err)) {
+        App.handleError('Invalid custom host rule:', rule);
+        continue;
+      }
+      if (canEval) {
+        evalCode.push(evalRules.length ? ',' : '',
+          '[', customRules.indexOf(rule), ',{',
+          ...Object.keys(FN_ARGS)
+            .map(k => RX_HAS_CODE.test(rule[k]) && `${k}(${FN_ARGS[k]}){${rule[k]}},`)
+            .filter(Boolean),
+          '}]');
+      }
+      evalRules.push(rule);
+    }
+    if (evalRules.length) {
+      let result, wnd;
+      if (canEval) {
+        const GMAE = hasGMAE
+          ? GM_addElement // eslint-disable-line no-undef
+          : (tag, {textContent}) => document.head.appendChild(
+            Object.assign(document.createElement(tag), {
+              textContent: TRUSTED.createScript(textContent),
+              nonce,
+            }));
+        evalCode.push(']; document.currentScript.remove();');
+        GMAE('script', {textContent: evalCode.join('')});
+        result = (wnd = unsafeWindow)[evalId] ||
+          isFF && (wnd = wnd.wrappedJSObject)[evalId];
+      }
+      if (result) {
+        for (const [index, fns] of result) {
+          Object.assign(customRules[index], fns);
+        }
+        delete wnd[evalId];
+      } else {
+        console.warn('Site forbids compiling JS code in these custom rules', evalRules);
+      }
+    }
 
     // rules that disable previewing
     const disablers = [
@@ -1425,6 +1479,12 @@ const Ruler = {
         e: 'a[data-hook=deviation_link]',
         q: 'link[as=image]',
       }] || [],
+      dotDomain.endsWith('.discord.com') && {
+        u: '||discordapp.net/external/',
+        r: /\/https?\/(.+)/,
+        s: '//$1',
+        follow: true,
+      },
       dotDomain.endsWith('.dropbox.com') && {
         r: /(.+?&size_mode)=\d+(.*)/,
         s: '$1=5$2',
@@ -1965,19 +2025,24 @@ const Ruler = {
         s: ['/_500/_1280/', ''],
       },
       {
-        u: '||twimg.com/',
-        r: /\/profile_images/i,
-        s: '/_(reasonably_small|normal|bigger|\\d+x\\d+)\\././g',
-      },
-      {
         u: '||twimg.com/media/',
         r: /.+?format=(jpe?g|png|gif)/i,
         s: '$0&name=orig',
       },
       {
+        u: '||twimg.com/media/',
+        r: /.+?\.(jpe?g|png|gif)/i,
+        s: '$0:orig',
+      },
+      {
         u: '||twimg.com/1/proxy',
         r: /t=([^&_]+)/i,
         s: m => atob(m[1]).match(/http.+/),
+      },
+      {
+        u: '||twimg.com/',
+        r: /\/profile_images/i,
+        s: '/_(reasonably_small|normal|bigger|\\d+x\\d+)\\././g',
       },
       {
         u: '||pic.twitter.com/',
@@ -2088,22 +2153,26 @@ const Ruler = {
         }
         if (isBatchOp) rule.e = e || undefined;
       }
-      const compileTo = isBatchOp ? rule : {};
+      let compileTo = isBatchOp ? rule : {};
       if (rule.r)
         compileTo.r = new RegExp(rule.r, 'i');
-      if (RX_HAS_CODE.test(rule.s))
-        compileTo.s = Util.newFunction('m', 'node', 'rule', rule.s);
-      if (RX_HAS_CODE.test(rule.q))
-        compileTo.q = Util.newFunction('text', 'doc', 'node', 'rule', rule.q);
-      if (RX_HAS_CODE.test(rule.c))
-        compileTo.c = Util.newFunction('text', 'doc', 'node', 'rule', rule.c);
+      if (App.NOP)
+        compileTo = {};
+      for (const key of Object.keys(FN_ARGS)) {
+        if (RX_HAS_CODE.test(rule[key])) {
+          const fn = Util.newFunction(...FN_ARGS[key], rule[key]);
+          if (fn !== App.NOP || !isBatchOp) {
+            compileTo[key] = fn;
+          } else if (isBatchOp) {
+            this.set(rule, 'unsafe-eval');
+          }
+        }
+      }
       return rule;
     } catch (err) {
-      if (/unsafe-eval|'Trusted Type'/.test(err)) {
-        return rule;
-      }
       if (isBatchOp) {
         this.set(rule, err);
+        return rule;
       } else {
         return err;
       }
@@ -2137,7 +2206,7 @@ const Ruler = {
 
   runQ(text, doc, docUrl) {
     let url;
-    if (typeof ai.rule.q === 'function') {
+    if (isFunction(ai.rule.q)) {
       url = ai.rule.q(text, doc, ai.node, ai.rule);
       if (Array.isArray(url)) {
         ai.urls = url.slice(1);
@@ -2173,7 +2242,7 @@ const Ruler = {
     for (const s of ensureArray(rule.s))
       urls.push(
         typeof s === 'string' ? Util.decodeUrl(Ruler.substituteSingle(s, m)) :
-          typeof s === 'function' ? s(m, node, rule) :
+          isFunction(s) ? s(m, node, rule) :
             s);
     if (rule.q && urls.length > 1) {
       console.warn('Rule discarded: "s" array is not allowed with "q"\n%o', rule);
@@ -2301,7 +2370,7 @@ const RuleMatcher = {
         url,
         urls: urls.length > 1 ? urls.slice(1) : null,
         gallery: rule.g && Gallery.makeParser(rule.g),
-        post: typeof rule.post === 'function' ? rule.post(match) : rule.post,
+        post: isFunction(rule.post) ? rule.post(match) : rule.post,
         xhr: xhr != null ? xhr : isSecureContext && !url.startsWith(location.protocol),
       };
     }
@@ -2310,7 +2379,7 @@ const RuleMatcher = {
 
   isFollowableUrl(url, rule) {
     const f = rule.follow;
-    return typeof f === 'function' ? f(url) : f;
+    return isFunction(f) ? f(url) : f;
   },
 };
 
@@ -2375,7 +2444,7 @@ const Remoting = {
       responseType: 'blob',
       headers: {
         Accept: 'image/png,image/*;q=0.8,*/*;q=0.5',
-        Referer: pageUrl || (typeof xhr === 'function' ? xhr() : url),
+        Referer: pageUrl || (isFunction(xhr) ? xhr() : url),
       },
       onprogress: Remoting.getImageProgress,
     });
@@ -2512,7 +2581,7 @@ const Status = {
 
   set(status) {
     if (!status && !cfg.globalStatus) {
-      ai.node && ai.node.removeAttribute(STATUS_ATTR);
+      if (ai.node) ai.node.removeAttribute(STATUS_ATTR);
       return;
     }
     const prefix = cfg.globalStatus ? PREFIX : '';
@@ -2750,7 +2819,7 @@ const Util = {
     try {
       return App.NOP || new Function(...args);
     } catch (e) {
-      if (!e.message.includes('unsafe-eval'))
+      if (!RX_EVAL_BLOCKED.test(e.message))
         throw e;
       App.NOP = () => {};
       return App.NOP;
@@ -2824,7 +2893,7 @@ const Util = {
 };
 
 async function setup({rule} = {}) {
-  if (typeof doc.body.attachShadow !== 'function') {
+  if (!isFunction(doc.body.attachShadow)) {
     alert('Cannot show MPIV config dialog: the browser is probably too old.\n' +
           'You can edit the script\'s storage directly in your userscript manager.');
     return;
@@ -3815,6 +3884,8 @@ const eventModifiers = e =>
   (e.metaKey ? '#' : '') +
   (e.shiftKey ? '+' : '');
 
+const isFunction = val => typeof val === 'function';
+
 const now = performance.now.bind(performance);
 
 const sumProps = (...props) => {
@@ -3867,6 +3938,11 @@ const $remove = node =>
 
 //#endregion
 //#region Init
+
+nonce = ($('script[nonce]') || {}).nonce || '';
+
+if (location.protocol === 'https:')
+  CspSniffer.init();
 
 Config.load({save: true}).then(res => {
   cfg = res;
