@@ -1504,13 +1504,12 @@ const Ruler = {
         html: true,
         follow: true,
       },
-      dotDomain.endsWith('.flickr.com') &&
-      tryCatch(() => unsafeWindow.YUI_config.flickr.api.site_key) && {
+      dotDomain.endsWith('.flickr.com') && {
         r: /flickr\.com\/photos\/[^/]+\/(\d+)/,
         s: m => `https://www.flickr.com/services/rest/?${
           new URLSearchParams({
             photo_id: m[1],
-            api_key: unsafeWindow.YUI_config.flickr.api.site_key,
+            api_key: '4fc101e6a223dd1141345383bbeaeccb',
             method: 'flickr.photos.getSizes',
             format: 'json',
             nojsoncallback: 1,
