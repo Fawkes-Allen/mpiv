@@ -1509,7 +1509,8 @@ const Ruler = {
         s: m => `https://www.flickr.com/services/rest/?${
           new URLSearchParams({
             photo_id: m[1],
-            api_key: '4fc101e6a223dd1141345383bbeaeccb',
+            csrf: unsafeWindow.YUI_config.flickr.csrf.token,
+            api_key: unsafeWindow.YUI_config.flickr.api.site_key,
             method: 'flickr.photos.getSizes',
             format: 'json',
             nojsoncallback: 1,
