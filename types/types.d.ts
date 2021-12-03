@@ -70,6 +70,8 @@ declare namespace mpiv {
      - a function that returns a string or an array of such strings
     */
     s?: StringOrArrayOfStrings | SubstitutionFunction
+    // do GMxhr without setting/getting cookies
+    anonymous?: boolean
     // whether the resultant URL should be processed again so another rule would match it
     follow?: boolean | BooleanFunction
     // POST method should be used to make HTTP request
