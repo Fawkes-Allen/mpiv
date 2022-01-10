@@ -23,7 +23,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.14
+// @version     1.2.19
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -252,6 +252,13 @@ const App = {
   handleError(e, rule = ai.rule) {
     if (rule && rule.onerror === 'skip')
       return;
+    if (CspSniffer.init &&
+        location.protocol === 'https:' &&
+        !ai.xhr &&
+        !ai.imageUrl.startsWith(location.origin + '/')) {
+      Popup.create(ai.imageUrl, ai.pageUrl, e);
+      return;
+    }
     const fe = Util.formatError(e, rule);
     if (!rule || !ai.urls || !ai.urls.length)
       console.warn(fe.consoleFormat, ...fe.consoleArgs);
@@ -731,13 +738,14 @@ const CspSniffer = {
 
   // will be null when done
   init() {
-    this.init = location.protocol === 'https:' && new Promise(resolve => {
+    this.busy = new Promise(resolve => {
       const xhr = new XMLHttpRequest();
       xhr.open('get', location);
+      xhr.timeout = Math.max(2000, (performance.timing.responseEnd - performance.timeOrigin) * 2);
       xhr.onreadystatechange = () => {
         if (xhr.readyState >= xhr.HEADERS_RECEIVED) {
           this.csp = this._parse(xhr.getResponseHeader('content-security-policy'));
-          this.init = null;
+          this.init = this.busy = xhr.onreadystatechange = null;
           xhr.abort();
           resolve();
         }
@@ -746,8 +754,9 @@ const CspSniffer = {
     });
   },
 
-  async check(url) {
-    if (this.init) await this.init;
+  async check(url, allowInit) {
+    if (allowInit && this.init) this.init();
+    if (this.busy) await this.busy;
     const isVideo = Util.isVideoUrl(url);
     let mode;
     if (this.csp) {
@@ -1219,7 +1228,7 @@ const Menu = window === top && GM.registerMenuCommand && {
 
 const Popup = {
 
-  async create(src, pageUrl) {
+  async create(src, pageUrl, error) {
     const inGallery = !cfg.uiFadeinGallery && ai.gItems && ai.popup && !ai.zooming &&
       (ai.popup.dataset.galleryFlip = '') === '';
     Popup.destroy();
@@ -1227,9 +1236,14 @@ const Popup = {
     if (!src)
       return;
     const myAi = ai;
-    let [xhr, isVideo] = await CspSniffer.check(src);
+    let [xhr, isVideo] = await CspSniffer.check(src, error);
     if (ai !== myAi)
       return;
+    if (!xhr && error) {
+      App.handleError(error);
+      return;
+    }
+    Object.assign(ai, {pageUrl, xhr});
     if (xhr)
       [src, isVideo] = await Remoting.getImage(src, pageUrl, xhr).catch(App.handleError) || [];
     if (ai !== myAi || !src)
@@ -3780,6 +3794,7 @@ ${cfg.uiFadein ? String.raw`
 ${App.popupStyleBase = `
   border: none;
   box-sizing: border-box;
+  background-size: cover;
   position: fixed;
   z-index: 2147483647;
   padding: 0;
@@ -3941,7 +3956,6 @@ const $remove = node =>
 //#region Init
 
 nonce = ($('script[nonce]') || {}).nonce || '';
-CspSniffer.init();
 
 Config.load({save: true}).then(res => {
   cfg = res;
