@@ -252,10 +252,11 @@ const App = {
   handleError(e, rule = ai.rule) {
     if (rule && rule.onerror === 'skip')
       return;
-    if (CspSniffer.init &&
-        location.protocol === 'https:' &&
+    if (ai.imageUrl &&
         !ai.xhr &&
-        !ai.imageUrl.startsWith(location.origin + '/')) {
+        !ai.imageUrl.startsWith(location.origin + '/') &&
+        location.protocol === 'https:' &&
+        CspSniffer.init) {
       Popup.create(ai.imageUrl, ai.pageUrl, e);
       return;
     }
@@ -317,7 +318,7 @@ const App = {
     Status.loading();
     ai.imageUrl = null;
     if (ai.rule.follow && !ai.rule.q && !ai.rule.s) {
-      Remoting.findRedirect();
+      Req.findRedirect();
     } else if (ai.rule.q && !Array.isArray(ai.urls)) {
       App.startFromQ();
     } else {
@@ -328,7 +329,7 @@ const App = {
 
   async startFromQ() {
     try {
-      const {responseText, doc, finalUrl} = await Remoting.getDoc(ai.url);
+      const {responseText, doc, finalUrl} = await Req.getDoc(ai.url);
       const url = Ruler.runQ(responseText, doc, finalUrl);
       if (!url)
         throw 'The "q" rule did not produce any URL.';
@@ -351,7 +352,7 @@ const App = {
     Status.loading();
     try {
       const startUrl = ai.url;
-      const p = await Remoting.getDoc(ai.rule.s !== 'gallery' && startUrl);
+      const p = await Req.getDoc(ai.rule.s !== 'gallery' && startUrl);
       const items = await new Promise(resolve => {
         const it = ai.gallery(p.responseText, p.doc, p.finalUrl, ai.match, ai.rule, ai.node,
           resolve);
@@ -637,7 +638,7 @@ class Config {
 
   constructor({data: c, save}) {
     if (typeof c === 'string')
-      c = tryCatch(JSON.parse, c);
+      c = tryJSON(c);
     if (typeof c !== 'object' || !c)
       c = {};
     const {DEFAULTS} = Config;
@@ -647,7 +648,7 @@ class Config {
     if (c.version !== DEFAULTS.version) {
       if (typeof c.hosts === 'string')
         c.hosts = c.hosts.split('\n')
-          .map(s => tryCatch(JSON.parse, s) || s)
+          .map(s => tryJSON(s) || s)
           .filter(Boolean);
       if (c.close === true || c.close === false)
         c.zoomOut = c.close ? 'auto' : 'stay';
@@ -946,7 +947,7 @@ const Events = {
         Gallery.next(-1);
         break;
       case 'KeyD':
-        Remoting.saveFile();
+        Req.saveFile();
         break;
       case 'KeyC':
         GM.setClipboard(Util.tabFixUrl() || p.src);
@@ -1158,7 +1159,7 @@ const Gallery = {
     items.title = processTitle();
     items.index =
       typeof g.index === 'string' &&
-        Remoting.findImageUrl(tryCatch($, g.index, doc), docUrl) ||
+        Req.findImageUrl(tryCatch($, g.index, doc), docUrl) ||
       RX_HAS_CODE.test(g.index) &&
         Util.newFunction('items', 'node', g.index)(items, ai.node) ||
       g.index;
@@ -1168,7 +1169,7 @@ const Gallery = {
       const item = {};
       try {
         const img = qEntry ? $(qImage, entry) : entry;
-        item.url = fix(Remoting.findImageUrl(img, docUrl), true);
+        item.url = fix(Req.findImageUrl(img, docUrl), true);
         item.desc = qCaption.map(processCaption, entry).filter(Boolean).join(' - ');
       } catch (e) {}
       return item.url && item;
@@ -1245,7 +1246,7 @@ const Popup = {
     }
     Object.assign(ai, {pageUrl, xhr});
     if (xhr)
-      [src, isVideo] = await Remoting.getImage(src, pageUrl, xhr).catch(App.handleError) || [];
+      [src, isVideo] = await Req.getImage(src, pageUrl, xhr).catch(App.handleError) || [];
     if (ai !== myAi || !src)
       return;
     const p = ai.popup = isVideo ? await PopupVideo.create() : $create('img');
@@ -1693,7 +1694,7 @@ const Ruler = {
       },
       {
         u: '||fastpic.',
-        e: 'a[href*="fastpic"][href*=".html"]',
+        e: 'a[href*="fastpic"]',
         s: m => m[0].replace('http:', 'https:').replace('fastpic.ru', 'fastpic.org'),
         q: 'img[src*="/big/"]',
       },
@@ -1902,18 +1903,27 @@ const Ruler = {
           '||imgur.com/a/',
           '||imgur.com/gallery/',
         ],
+        s: 'gallery', // suppressing an unused network request for remote `document`
         g: async (text, doc, url, m, rule, node, cb) => {
-          let u = `https://imgur.com/ajaxalbums/getimages/${url.split(/[/?#]/)[4]}/hit.json?all=true`;
-          const info = tryCatch(JSON.parse, (await Remoting.gmXhr(u)).responseText);
-          const images = ((info || 0).data || 0).images;
+          let u = `https://imgur.com/ajaxalbums/getimages/${ai.url.split(/[/?#]/)[4]}/hit.json?all=true`;
+          let info = tryJSON((await Req.gmXhr(u)).responseText) || 0;
+          let images = (info.data || 0).images || [];
+          if (!images[0]) {
+            info = (await Req.gmXhr(ai.url)).responseText.match(/postDataJSON=(".*?")<|$/)[1];
+            info = tryJSON(tryJSON(info)) || 0;
+            images = info.media;
+          }
           const items = [];
-          for (const img of images || []) {
-            u = `https://i.imgur.com/${img.hash}`;
+          for (const img of images) {
+            const meta = img.metadata || img;
             items.push({
-              url: img.ext === '.gif' && img.animated !== false ?
-                [`${u}.webm`, `${u}.mp4`, u] :
-                u + img.ext,
-              desc: [img.title, img.description].filter(Boolean).join(' - '),
+              url: img.url ||
+                (u = `https://i.imgur.com/${img.hash}`) && (
+                  img.ext === '.gif' && img.animated !== false ?
+                    [`${u}.webm`, `${u}.mp4`, u] :
+                    u + img.ext
+                ),
+              desc: [meta.title, meta.description].filter(Boolean).join(' - '),
             });
           }
           if (items[0] && info.title && !`${items[0].desc || ''}`.includes(info.title))
@@ -2135,7 +2145,7 @@ const Ruler = {
     if (text.startsWith('{') &&
         text.endsWith('}') &&
         /[{,]\s*"[degqrsu]"\s*:\s*"/.test(text)) {
-      const rule = tryCatch(JSON.parse, text);
+      const rule = tryJSON(text);
       return rule && Object.keys(rule).some(k => /^[degqrsu]$/.test(k)) && rule;
     }
   },
@@ -2213,7 +2223,7 @@ const Ruler = {
       (ai.tooltip || 0).text ||
       ai.node.alt ||
       $propUp(ai.node, 'title') ||
-      Remoting.getFileName(
+      Req.getFileName(
         ai.node.tagName === (ai.popup || 0).tagName
           ? ai.url
           : ai.node.src || $propUp(ai.node, 'href')),
@@ -2229,7 +2239,7 @@ const Ruler = {
       }
     } else {
       const el = $many(ai.rule.q, doc);
-      url = Remoting.findImageUrl(el, docUrl);
+      url = Req.findImageUrl(el, docUrl);
     }
     return url;
   },
@@ -2398,7 +2408,7 @@ const RuleMatcher = {
   },
 };
 
-const Remoting = {
+const Req = {
 
   gmXhr(url, opts = {}) {
     if (ai.req)
@@ -2439,8 +2449,8 @@ const Remoting = {
       };
     }
     const r = await (!ai.post ?
-      Remoting.gmXhr(url) :
-      Remoting.gmXhr(url, {
+      Req.gmXhr(url) :
+      Req.gmXhr(url, {
         method: 'POST',
         data: ai.post,
         headers: {
@@ -2455,23 +2465,23 @@ const Remoting = {
   async getImage(url, pageUrl, xhr = ai.xhr) {
     ai.bufBar = false;
     ai.bufStart = now();
-    const response = await Remoting.gmXhr(url, {
+    const response = await Req.gmXhr(url, {
       responseType: 'blob',
       headers: {
         Accept: 'image/png,image/*;q=0.8,*/*;q=0.5',
         Referer: pageUrl || (isFunction(xhr) ? xhr() : url),
       },
-      onprogress: Remoting.getImageProgress,
+      onprogress: Req.getImageProgress,
     });
     Bar.set(false);
-    const type = Remoting.guessMimeType(response);
+    const type = Req.guessMimeType(response);
     let b = response.response;
     if (!b) throw 'Empty response';
     if (b.type !== type)
       b = b.slice(0, b.size, type);
     const res = xhr === 'blob'
       ? (ai.blobUrl = URL.createObjectURL(b))
-      : await Remoting.blobToDataUrl(b);
+      : await Req.blobToDataUrl(b);
     return [res, type.startsWith('video')];
   },
 
@@ -2487,7 +2497,7 @@ const Remoting = {
 
   async findRedirect() {
     try {
-      const {finalUrl} = await Remoting.gmXhr(ai.url, {
+      const {finalUrl} = await Req.gmXhr(ai.url, {
         method: 'HEAD',
         headers: {
           'Referer': location.href.split('#', 1)[0],
@@ -2505,7 +2515,7 @@ const Remoting = {
 
   async saveFile() {
     const url = ai.popup.src || ai.popup.currentSrc;
-    let name = Remoting.getFileName(ai.imageUrl || url);
+    let name = Req.getFileName(ai.imageUrl || url);
     if (!name.includes('.'))
       name += '.jpg';
     if (url.startsWith('blob:') || url.startsWith('data:')) {
@@ -2526,7 +2536,7 @@ const Remoting = {
           Bar.set(`Could not download ${name}: ${e.error || e.message || e}.`, 'error');
           onload();
         },
-        onprogress: Remoting.getImageProgress,
+        onprogress: Req.getImageProgress,
         onload({response}) {
           onload();
           if (!gmDL) { // polyfilling GM_download
@@ -3200,7 +3210,7 @@ async function setupRuleInstaller(e) {
   let rules;
 
   try {
-    rules = extractRules(await Remoting.getDoc(this.href));
+    rules = extractRules(await Req.getDoc(this.href));
     const selector = $create('select', {
       size: 8,
       style: 'width: 100%',
@@ -3916,6 +3926,9 @@ const tryCatch = function (fn, ...args) {
     return fn.apply(this, args);
   } catch (e) {}
 };
+
+const tryJSON = str =>
+  tryCatch(JSON.parse, str);
 
 const $ = (sel, node = doc) =>
   node.querySelector(sel) || false;
