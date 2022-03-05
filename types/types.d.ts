@@ -14,6 +14,8 @@ declare namespace mpiv {
     globalStatus: boolean
     hosts: HostRule[]
     imgtab: boolean
+    keepOnBlur: boolean
+    keepVids: boolean
     mute: boolean
     preload: boolean
     scale: number
