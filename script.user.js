@@ -23,7 +23,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.22
+// @version     1.2.26
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -130,24 +130,26 @@ const App = {
   isImageTab: false,
   globalStyle: '',
   popupStyleBase: '',
+  tabfix: /\.(dumpoir|greatfon|picuki)\.com$/.test(dotDomain),
 
   activate(info, event) {
     const {match, node, rule, url} = info;
     const auto = cfg.start === 'auto';
     const vidCtrl = cfg.videoCtrl && isVideo(node);
     if (elSetup) console.info({node, rule, url, match});
-    if (auto && vidCtrl && !event.ctrlKey)
+    if (auto && vidCtrl && !Events.ctrl)
       return;
     if (ai.node) App.deactivate();
     ai = info;
-    ai.force = event.ctrlKey;
+    ai.force = Events.ctrl;
     ai.gNum = 0;
     ai.zooming = cfg.css.includes(`${PREFIX}zooming`);
     Util.suppressTooltip();
     Calc.updateViewSize();
+    Events.ctrl = false;
     Events.toggle(true);
     Events.trackMouse(event);
-    if (ai.force && (auto || !vidCtrl)) {
+    if (ai.force && (auto || cfg.start === 'ctrl' || cfg.start === 'context')) {
       App.start();
     } else if (auto && !vidCtrl && !rule.manual) {
       App.belate();
@@ -818,10 +820,10 @@ const CspSniffer = {
 
 const Events = {
 
+  ctrl: false,
   hoverData: null,
   hoverTimer: 0,
   ignoreKeyHeld: false,
-  keys: new Set(),
 
   onMouseOver(e) {
     let node = e.target;
@@ -916,10 +918,13 @@ const Events = {
   },
 
   onKeyDown(e) {
-    Events.keys.add(e.key);
     // Synthesized events may be of the wrong type and not have a `key`
-    const key = eventModifiers(e) + (e.key && e.key.length > 1 ? e.key : e.code);
+    const key = describeKey(e);
     const p = ai.popup;
+    if (!p && key === '^Control') {
+      addEventListener('keyup', Events.onKeyUp, true);
+      Events.ctrl = true;
+    }
     if (!p && key === '^ContextMenu')
       return Events.onContext.call(this, e);
     if (!p || e.repeat)
@@ -1007,8 +1012,11 @@ const Events = {
 
   onKeyUp(e) {
     const p = ai.popup || false;
-    const {keys} = Events;
-    if (e.key === 'Shift' && ai.shiftKeyTime) {
+    if (e.key === 'Control') {
+      if (!p) removeEventListener('keyup', Events.onKeyUp, true);
+      setTimeout(() => (Events.ctrl = false));
+    }
+    if (p && e.key === 'Shift' && ai.shiftKeyTime) {
       Status.set('-shift');
       Bar.hide(true);
       if (p.controls)
@@ -1022,7 +1030,7 @@ const Events = {
         App.deactivate({wait: true});
       ai.shiftKeyTime = 0;
     } else if (
-      e.key === 'Control' && !p && !Events.ignoreKeyHeld && keys.size === 1 &&
+      describeKey(e) === 'Control' && !p && !Events.ignoreKeyHeld &&
       (cfg.start === 'ctrl' || cfg.start === 'context' || ai.rule.manual)
     ) {
       dropEvent(e);
@@ -1035,10 +1043,6 @@ const Events = {
         App.start();
       }
     }
-    if (e.key === 'Control')
-      keys.clear();
-    else if (!keys.has('Control'))
-      keys.delete(e.key);
   },
 
   onContext(e) {
@@ -1047,7 +1051,7 @@ const Events = {
     const p = ai.popup;
     if (cfg.zoom === 'context' && p && App.toggleZoom()) {
       dropEvent(e);
-    } else if (!p && (!cfg.videoCtrl || !isVideo(ai.node) || e.ctrlKey) && (
+    } else if (!p && (!cfg.videoCtrl || !isVideo(ai.node) || Events.ctrl) && (
       cfg.start === 'context' ||
       cfg.start === 'contextMK' ||
       cfg.start === 'contextM' && (e.button === 2) ||
@@ -1068,6 +1072,10 @@ const Events = {
     }
   },
 
+  onVisibility(e) {
+    Events.ctrl = false;
+  },
+
   pierceShadow(node, x, y) {
     for (let root; (root = node.shadowRoot);) {
       root.addEventListener('mouseover', Events.onMouseOver, {passive: true});
@@ -1086,7 +1094,6 @@ const Events = {
     window[onOff]('mousemove', Events.onMouseMove, passive);
     window[onOff]('mouseout', Events.onMouseOut, passive);
     window[onOff]('mousedown', Events.onMouseDown, passive);
-    window[onOff]('keydown', Events.onKeyDown, true); // override normal page listeners
     window[onOff]('keyup', Events.onKeyUp, true);
     window[onOff](WHEEL_EVENT, Events.onMouseScroll, {passive: false});
   },
@@ -1180,9 +1187,9 @@ const Gallery = {
     items.title = processTitle();
     items.index =
       typeof g.index === 'string' &&
-        Req.findImageUrl(tryCatch($, g.index, doc), docUrl) ||
+      Req.findImageUrl(tryCatch($, g.index, doc), docUrl) ||
       RX_HAS_CODE.test(g.index) &&
-        Util.newFunction('items', 'node', g.index)(items, ai.node) ||
+      Util.newFunction('items', 'node', g.index)(items, ai.node) ||
       g.index;
     return items;
 
@@ -1720,8 +1727,14 @@ const Ruler = {
       },
       {
         u: '||fastpic.',
-        e: 'a[href*="fastpic"]',
-        s: m => m[0].replace('http:', 'https:').replace('fastpic.ru', 'fastpic.org'),
+        s: (m, node) => {
+          const a = node.closest('a');
+          const url = decodeURIComponent(Req.findImageUrl(a || node))
+            .replace(/\/i(\d+)\.(\w+\.\w+\/)\w+/, '/$2$1')
+            .replace(/^\w+:\/\/fastpic[^/]+((?:\/\d+){3})\/\w+(\/\w+\.\w+).*/,
+              'https://fastpic.org/view$1$2.html');
+          return a || url.includes('.png') ? url : [url, url.replace(/\.jpe?g/, '.png')];
+        },
         q: 'img[src*="/big/"]',
       },
       {
@@ -2918,8 +2931,8 @@ const Util = {
   },
 
   tabFixUrl() {
-    return ai.rule.tabfix && ai.popup.tagName === 'IMG' && !ai.xhr &&
-           navigator.userAgent.includes('Gecko/') &&
+    const {tabfix = App.tabfix} = ai.rule;
+    return tabfix && ai.popup.tagName === 'IMG' && !ai.xhr &&
            flattenHtml(`data:text/html;charset=utf8,
       <style>
         body {
@@ -3980,6 +3993,9 @@ const eventModifiers = e =>
   (e.metaKey ? '#' : '') +
   (e.shiftKey ? '+' : '');
 
+/** @param {KeyboardEvent} e */
+const describeKey = e => eventModifiers(e) + (e.key && e.key.length > 1 ? e.key : e.code);
+
 const isFunction = val => typeof val === 'function';
 
 const isVideo = el => el && el.tagName === 'VIDEO';
@@ -4088,6 +4104,8 @@ Config.load({save: true}).then(res => {
   addEventListener('mouseover', Events.onMouseOver, true);
   addEventListener('contextmenu', Events.onContext, true);
   addEventListener('keydown', Events.onKeyDown, true);
+  addEventListener('visibilitychange', Events.onVisibility, true);
+  addEventListener('blur', Events.onVisibility, true);
   if (['greasyfork.org', 'github.com'].includes(hostname))
     addEventListener('click', setupClickedRule, true);
   addEventListener('message', App.onMessage, true);
