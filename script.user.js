@@ -23,7 +23,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.26
+// @version     1.2.27
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -131,6 +131,8 @@ const App = {
   globalStyle: '',
   popupStyleBase: '',
   tabfix: /\.(dumpoir|greatfon|picuki)\.com$/.test(dotDomain),
+  NOP: /\.(instagram|chrome|google)\.com$/.test(dotDomain) &&
+    (() => {}),
 
   activate(info, event) {
     const {match, node, rule, url} = info;
@@ -1095,7 +1097,7 @@ const Events = {
     window[onOff]('mouseout', Events.onMouseOut, passive);
     window[onOff]('mousedown', Events.onMouseDown, passive);
     window[onOff]('keyup', Events.onKeyUp, true);
-    window[onOff](WHEEL_EVENT, Events.onMouseScroll, {passive: false});
+    window[onOff](WHEEL_EVENT, Events.onMouseScroll, {passive: false, capture: true});
   },
 
   trackMouse(e) {
@@ -1614,7 +1616,7 @@ const Ruler = {
           rule._img = img;
           return (
             !a && !src ? false :
-              !data || rule.q || rule.g ? `${src || a.href}${rule.g ? '?__a=1' : ''}` :
+              !data || rule.q || rule.g ? `${src || a.href}${rule.g ? '?__a=1&__d=dis' : ''}` :
                 data.video_url || data.display_url);
         },
         c: (html, doc, node, rule) =>
@@ -2004,7 +2006,8 @@ const Ruler = {
           '||instagram.com/p/',
           '||instagram.com/tv/',
         ],
-        s: m => m.input.substr(0, m.input.lastIndexOf('/')).replace('/liked_by', '') + '/?__a=1',
+        s: m => m.input.substr(0, m.input.lastIndexOf('/')).replace('/liked_by', '') +
+        '/?__a=1&__d=dis',
         q: m => (m = tryJSON(m)) && (
           m = pick(m, 'graphql.shortcode_media') || pick(m, 'items[0]') || 0
         ) && (
