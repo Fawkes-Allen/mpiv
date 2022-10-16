@@ -23,7 +23,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.27
+// @version     1.2.28
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -75,6 +75,7 @@ const isFF = CSS.supports('-moz-appearance', 'none');
 const AudioContext = window.AudioContext || function () {};
 
 const PREFIX = 'mpiv-';
+const NOAA_ATTR = 'data-no-aa';
 const STATUS_ATTR = `${PREFIX}status`;
 const MSG = Object.assign({}, ...[
   'getViewSize',
@@ -314,11 +315,6 @@ const App = {
   },
 
   start() {
-    // check explicitly as the cursor may have moved into an iframe so mouseout wasn't reported
-    if (!Util.isHovered(ai.node)) {
-      App.deactivate();
-      return;
-    }
     App.updateStyles();
     if (ai.gallery)
       App.startGallery();
@@ -845,16 +841,17 @@ const Events = {
     // we don't want to process everything in the path of a quickly moving mouse cursor
     Events.hoverData = {e, node, start: now()};
     Events.hoverTimer = Events.hoverTimer || setTimeout(Events.onMouseOverThrottled, SETTLE_TIME);
+    node.addEventListener('mouseout', Events.onMouseOutThrottled);
   },
 
   onMouseOverThrottled(force) {
-    if (!Events.hoverData)
+    const {start, e, node, nodeOut} = Events.hoverData || {};
+    if (!node || node === nodeOut && (Events.hoverData = null, 1))
       return;
-    const {start, e, node} = Events.hoverData;
     // clearTimeout + setTimeout is expensive so we'll use the cheaper perf.now() for rescheduling
     const wait = force ? 0 : start + SETTLE_TIME - now();
-    Events.hoverTimer = wait > 10 && setTimeout(Events.onMouseOverThrottled, wait);
-    if (Events.hoverTimer || !Util.isHovered(node))
+    const t = Events.hoverTimer = wait > 10 && setTimeout(Events.onMouseOverThrottled, wait);
+    if (t)
       return;
     Events.hoverData = null;
     if (!Ruler.rules)
@@ -867,6 +864,13 @@ const Events = {
   onMouseOut(e) {
     if (!e.relatedTarget && !cfg.keepOnBlur && !e.shiftKey && App.canCloseVid())
       App.deactivate();
+  },
+
+  onMouseOutThrottled(e) {
+    const d = Events.hoverData;
+    if (d) d.nodeOut = this;
+    this.removeEventListener('mouseout', Events.onMouseOutThrottled);
+    Events.hoverTimer = 0;
   },
 
   onMouseOutShadow(e) {
@@ -942,10 +946,10 @@ const Events = {
           p.controls = true;
         return;
       case 'KeyA':
-        if (!p.hasAttribute('data-no-aa'))
-          p.setAttribute('data-no-aa', '');
+        if (!p.hasAttribute(NOAA_ATTR))
+          p.setAttribute(NOAA_ATTR, '');
         else
-          p.removeAttribute('data-no-aa');
+          p.removeAttribute(NOAA_ATTR);
         break;
       case 'ArrowRight':
       case 'KeyJ':
@@ -1098,6 +1102,7 @@ const Events = {
     window[onOff]('mousedown', Events.onMouseDown, passive);
     window[onOff]('keyup', Events.onKeyUp, true);
     window[onOff](WHEEL_EVENT, Events.onMouseScroll, {passive: false, capture: true});
+    ai.node.removeEventListener('mouseout', Events.onMouseOutThrottled);
   },
 
   trackMouse(e) {
@@ -2880,11 +2885,6 @@ const Util = {
     };
   },
 
-  isHovered(el) {
-    // doesn't work in image tabs, browser bug?
-    return App.isImageTab || el.closest(':hover');
-  },
-
   isVideoUrl: url => url.startsWith('data:video') || Util.isVideoUrlExt(url),
 
   isVideoUrlExt: url => (url = Util.extractFileExt(url)) && /^(webm|mp4)$/i.test(url),
@@ -3667,7 +3667,7 @@ function createSetupElement() {
     $new('style', CSS_SETUP),
     $new('style#_css', cfg._getCss()),
     $new(`main#${PREFIX}setup`, [
-      $new('div#_x'),
+      $new('div#_x', 'x'),
       $new('ul.column', [
         $new('details', {style: 'margin: -1em 0 0'}, [
           $new('summary', {style: 'cursor: pointer; font: bold 16px normal; margin-bottom: .5em'},
@@ -3827,7 +3827,7 @@ function createSetupElement() {
                  'padding-left: 3px; padding-right: 3px;',
         }, [
           $new('div#_rules.column',
-            $new('textarea#css', {spellcheck: false, rows: 1})),
+            $new('textarea', {spellcheck: false, rows: 1})),
         ]),
         $new('li', [
           $new('div#_installLoading', {hidden: true}, 'Loading...'),
@@ -3918,7 +3918,7 @@ ${App.popupStyleBase = `
   animation: none;
   transition: none;
 }
-#\mpiv-popup[data-no-aa],
+#\mpiv-popup[${NOAA_ATTR}],
 #\mpiv-popup.\mpiv-zoom-max {
   image-rendering: pixelated;
 }
