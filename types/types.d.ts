@@ -17,6 +17,7 @@ declare namespace mpiv {
     keepOnBlur: boolean
     keepVids: boolean
     mute: boolean
+    night: boolean
     preload: boolean
     scale: number
     scales: (string | number)[]
@@ -146,6 +147,7 @@ declare namespace mpiv {
     large: boolean
     /** naturalHeight */
     nheight: number
+    night: boolean
     /** naturalWidth */
     nwidth: number
     popup: HTMLImageElement | HTMLVideoElement

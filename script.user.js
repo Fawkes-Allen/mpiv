@@ -4,6 +4,7 @@
 // @description Shows images and videos behind links and thumbnails.
 //
 // @include     *
+// @run-at      document-start
 //
 // @grant       GM_addElement
 // @grant       GM_download
@@ -23,7 +24,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.28
+// @version     1.2.32
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -91,18 +92,13 @@ const RX_EVAL_BLOCKED = /'Trusted(Script| Type)'|unsafe-eval/;
 const RX_MEDIA_URL = /^(?!data:)[^?#]+?\.(avif|bmp|jpe?g?|gif|m4v|mp4|png|svgz?|web[mp])($|[?#])/i;
 const ZOOM_MAX = 16;
 const SYM_U = Symbol('u');
-const TRUSTED = (({trustedTypes}, policy) =>
-  trustedTypes ? trustedTypes.createPolicy('mpiv', policy) : policy
-)(window, {
-  createHTML: str => str,
-  createScript: str => str,
-});
 const FN_ARGS = {
   s: ['m', 'node', 'rule'],
   c: ['text', 'doc', 'node', 'rule'],
   q: ['text', 'doc', 'node', 'rule'],
   g: ['text', 'doc', 'url', 'm', 'rule', 'node', 'cb'],
 };
+let trustedHTML, trustedScript;
 //#endregion
 //#region GM4 polyfill
 
@@ -170,12 +166,6 @@ const App = {
     } else {
       ai.timer = setTimeout(App.start, cfg.delay);
     }
-  },
-
-  checkImageTab() {
-    const el = doc.body.firstElementChild;
-    App.isImageTab = el && el === doc.body.lastElementChild && el.matches('img, video');
-    App.isEnabled = cfg.imgtab || !App.isImageTab;
   },
 
   checkProgress({start} = {}) {
@@ -361,12 +351,8 @@ const App = {
     try {
       const startUrl = ai.url;
       const p = await Req.getDoc(ai.rule.s !== 'gallery' && startUrl);
-      const items = await new Promise(resolve => {
-        const it = ai.gallery(p.responseText, p.doc, p.finalUrl, ai.match, ai.rule, ai.node,
-          resolve);
-        if (Array.isArray(it))
-          resolve(it);
-      });
+      const items = await new Promise(resolve => resolve(
+        ai.gallery(p.responseText, p.doc, p.finalUrl, ai.match, ai.rule, ai.node, resolve)));
       // bail out if the gallery's async callback took too long
       if (ai.url !== startUrl) return;
       ai.gNum = items.length;
@@ -425,7 +411,7 @@ const Bar = {
     Bar.updateDetails();
     Bar.show();
     b.textContent = '';
-    b.innerHTML = TRUSTED.createHTML(label);
+    b.innerHTML = trustedHTML ? trustedHTML(label) : label;
     if (!b.parentNode) {
       doc.body.appendChild(b);
       Util.forceLayout(b);
@@ -443,7 +429,7 @@ const Bar = {
   },
 
   hide(isForced) {
-    if (ai.bar && (isForced || !ai.bar.dataset.force)) {
+    if (ai.bar && (isForced || ai.bar.dataset.force == null)) {
       $css(ai.bar, {opacity: 0});
       delete ai.bar.dataset.force;
     }
@@ -544,7 +530,7 @@ const Calc = {
       nw = ai.nwidth = w;
       p.style.cssText = `width: ${nw}px !important; height: ${nh}px !important;`;
     }
-    p.className = `${PREFIX}show`;
+    p.classList.add(`${PREFIX}show`);
     p.removeAttribute('style');
     const s = getComputedStyle(p);
     const o2 = sumProps(s.outlineOffset, s.outlineWidth) * 2;
@@ -715,6 +701,7 @@ Config.DEFAULTS = /** @type mpiv.Config */ Object.assign(Object.create(null), {
   keepOnBlur: false,
   keepVids: false,
   mute: false,
+  night: false,
   preload: false,
   scale: 1.25,
   scales: ['0!', 0.125, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 8, 16],
@@ -756,7 +743,10 @@ const CspSniffer = {
       xhr.timeout = Math.max(2000, (performance.timing.responseEnd - performance.timeOrigin) * 2);
       xhr.onreadystatechange = () => {
         if (xhr.readyState >= xhr.HEADERS_RECEIVED) {
-          this.csp = this._parse(xhr.getResponseHeader('content-security-policy'));
+          this.csp = this._parse([
+            xhr.getResponseHeader('content-security-policy'),
+            $prop('meta[http-equiv="Content-Security-Policy"]', 'content'),
+          ].filter(Boolean).join(','));
           this.init = this.busy = xhr.onreadystatechange = null;
           xhr.abort();
           resolve();
@@ -983,6 +973,9 @@ const Events = {
       case 'KeyM':
         if (isVideo(p))
           p.muted = !p.muted;
+        break;
+      case 'KeyN':
+        ai.night = p.classList.toggle('mpiv-night');
         break;
       case 'KeyT':
         GM.openInTab(Util.tabFixUrl() || p.src);
@@ -1288,13 +1281,15 @@ const Popup = {
     p.id = `${PREFIX}popup`;
     p.src = src;
     p.addEventListener('error', App.handleError);
+    if ((ai.night = (ai.night != null ? ai.night : cfg.night)))
+      p.classList.add('mpiv-night');
     if (ai.zooming)
       p.addEventListener('transitionend', Popup.onZoom);
     if (inGallery) {
       p.dataset.galleryFlip = '';
       p.setAttribute('loaded', '');
     }
-    doc.body.insertBefore(p, ai.bar || undefined);
+    doc.body.insertBefore(p, ai.bar && ai.bar.parentElement === doc.body && ai.bar || null);
     await 0;
     if (App.checkProgress({start: true}) === false)
       return;
@@ -1430,7 +1425,7 @@ const Ruler = {
     const errors = new Map();
     const customRules = (cfg.hosts || []).map(Ruler.parse, errors);
     const hasGMAE = typeof GM_addElement === 'function';
-    const canEval = nonce || hasGMAE;
+    const canEval = nonce || (nonce = ($('script[nonce]') || {}).nonce || '') || hasGMAE;
     const evalId = canEval && `${GM_info.script.name}${Math.random()}`;
     const evalRules = [];
     const evalCode = [`window[${JSON.stringify(evalId)}]=[`];
@@ -1454,9 +1449,9 @@ const Ruler = {
       if (canEval) {
         const GMAE = hasGMAE
           ? GM_addElement // eslint-disable-line no-undef
-          : (tag, {textContent}) => document.head.appendChild(
+          : (tag, {textContent: txt}) => document.head.appendChild(
             Object.assign(document.createElement(tag), {
-              textContent: TRUSTED.createScript(textContent),
+              textContent: trustedScript ? trustedScript(txt) : txt,
               nonce,
             }));
         evalCode.push(']; document.currentScript.remove();');
@@ -2372,7 +2367,7 @@ const RuleMatcher = {
   /** @returns {Object} */
   adaptiveFind(node, opts) {
     const tn = node.tagName;
-    const src = node.currentSrc || node.src;
+    const src = node.currentSrc || node.src || '';
     const isPic = tn === 'IMG' || tn === 'VIDEO' && Util.isVideoUrlExt(src);
     let a, info, url;
     // note that data URLs aren't passed to rules as those may have fatally ineffective regexps
@@ -2892,7 +2887,11 @@ const Util = {
 
   newFunction(...args) {
     try {
-      return App.NOP || new Function(...args);
+      return App.NOP || (trustedScript
+        // eslint-disable-next-line no-eval
+        ? window.eval(trustedScript(`(function anonymous(${args.slice(0, -1).join(',')}){${args.slice(-1)[0]}})`))
+        : new Function(...args)
+      );
     } catch (e) {
       if (!RX_EVAL_BLOCKED.test(e.message))
         throw e;
@@ -3643,14 +3642,14 @@ function createSetupElement() {
   const scalesHint = 'Leave it empty and click Apply or OK to restore the default values.';
   const $newLink = (text, href, props) =>
     $new('a', Object.assign({target: '_blank'}, href && {href}, props), text);
-  const $newCheck = (label, id, title, props) =>
+  const $newCheck = (label, id, title = '', props) =>
     $new('label', Object.assign({title}, props), [
       $new('input', {id, type: 'checkbox'}),
       label,
     ]);
   const $newKbd = (str, tag = 'fragment') =>
     $new(tag, str.split(/({.+?})/).map(s => s[0] === '{' ? $new('kbd', s.slice(1, -1)) : s));
-  const $newRange = (id, title, min = 0, max = 100, step = 1, type = 'range') =>
+  const $newRange = (id, title = '', min = 0, max = 100, step = 1, type = 'range') =>
     $new('input', {id, min, max, step, type, 'data-title': title});
   const $newSelect = (label, id, values) =>
     $new('label', [
@@ -3685,6 +3684,7 @@ function createSetupElement() {
             'Rotate': '{L} {r} keys (left or right)',
             'Flip/mirror': '{h} {v} keys (horizontally or vertically)',
             'Previous/next\nin album': 'mouse wheel, {j} {k} or {←} {→} keys',
+            'Night mode toggle': '{n} key',
             '---2': '',
           }),
           $newTable({
@@ -3754,6 +3754,7 @@ function createSetupElement() {
               'i.e. when mouse pointer moves outside the page'),
           ]),
           $new([
+            $newCheck('Night mode', 'night'),
             $newCheck('Mute videos', 'mute'),
             $newCheck('Spoof hotlinking*`, ', 'xhr',
               'Disable only if you spoof the HTTP headers yourself'),
@@ -3922,6 +3923,12 @@ ${App.popupStyleBase = `
 #\mpiv-popup[${NOAA_ATTR}],
 #\mpiv-popup.\mpiv-zoom-max {
   image-rendering: pixelated;
+}
+#\mpiv-popup.\mpiv-night:not(#\\0) {
+  box-shadow: 0 0 0 9999px #000;
+}
+body:has(#\mpiv-popup.\mpiv-night)::-webkit-scrollbar {
+  background: #000;
 }
 #\mpiv-setup {
 }
@@ -4096,15 +4103,19 @@ const $remove = node =>
 //#endregion
 //#region Init
 
-nonce = ($('script[nonce]') || {}).nonce || '';
-
-Config.load({save: true}).then(res => {
-  cfg = res;
+(async () => {
+  cfg = await Config.load({save: true});
+  if (!doc.body) {
+    await new Promise(resolve =>
+      new MutationObserver((_, mo) => doc.body && (mo.disconnect(), resolve()))
+        .observe(document, {subtree: true, childList: true}));
+  }
+  const el = doc.body.firstElementChild;
+  if (el) {
+    App.isImageTab = el === doc.body.lastElementChild && el.matches('img, video');
+    App.isEnabled = cfg.imgtab || !App.isImageTab;
+  }
   if (Menu) Menu.register();
-
-  if (doc.body) App.checkImageTab();
-  else addEventListener('DOMContentLoaded', App.checkImageTab, {once: true});
-
   addEventListener('mouseover', Events.onMouseOver, true);
   addEventListener('contextmenu', Events.onContext, true);
   addEventListener('keydown', Events.onKeyDown, true);
@@ -4113,6 +4124,21 @@ Config.load({save: true}).then(res => {
   if (['greasyfork.org', 'github.com'].includes(hostname))
     addEventListener('click', setupClickedRule, true);
   addEventListener('message', App.onMessage, true);
-});
+})();
+
+if (window.trustedTypes) {
+  const TT = window.trustedTypes;
+  const CP = 'createPolicy';
+  const createPolicy = TT[CP];
+  TT[CP] = function ovr(name, opts) {
+    let fn;
+    const p = createPolicy.call(TT, name, opts);
+    if ((trustedHTML || (fn = opts.createHTML) && (trustedHTML = fn.bind(p))) &&
+        (trustedScript || (fn = opts.createScript) && (trustedScript = fn.bind(p))) &&
+        TT[CP] === ovr)
+      TT[CP] = createPolicy;
+    return p;
+  };
+}
 
 //#endregion
