@@ -24,7 +24,7 @@
 // @grant       GM.setValue
 // @grant       GM.xmlHttpRequest
 //
-// @version     1.2.32
+// @version     1.2.34
 // @author      tophf
 //
 // @original-version 2017.9.29
@@ -1289,6 +1289,8 @@ const Popup = {
       p.dataset.galleryFlip = '';
       p.setAttribute('loaded', '');
     }
+    const poo = typeof p.showPopover === 'function' && $('[popover]:popover-open');
+    ai.popover = poo && poo.getBoundingClientRect().width && ($css(poo, {opacity: 0}), poo) || null;
     doc.body.insertBefore(p, ai.bar && ai.bar.parentElement === doc.body && ai.bar || null);
     await 0;
     if (App.checkProgress({start: true}) === false)
@@ -1304,6 +1306,10 @@ const Popup = {
     if (!p) return;
     p.removeEventListener('load', Popup.onLoad);
     p.removeEventListener('error', App.handleError);
+    if (ai.popover) {
+      ai.popover.style.removeProperty('opacity');
+      ai.popover = null;
+    }
     if (isFunction(p.pause))
       p.pause();
     if (ai.blobUrl)
@@ -1506,11 +1512,20 @@ const Ruler = {
         html: true,
       },
       ...dotDomain.endsWith('.deviantart.com') && [{
-        e: '[data-super-full-img] *, img[src*="/th/"]',
-        s: (m, node) =>
-          $propUp(node, 'data-super-full-img') ||
-          (node = node.dataset.embedId && node.nextElementSibling) &&
-          node.dataset.embedId && node.src,
+        e: 'a[href*="/art/"] img[src*="/v1/"]',
+        r: /^(.+)\/v1\/\w+\/[^/]+\/(.+)-\d+.(\.\w+)(\?.+)/,
+        s: ([, base, name, ext, tok], node) => {
+          node = node.closest('a');
+          let v = isFF && node.wrappedJSObject || node;
+          for (const k in v)
+            if (typeof k === 'string' && k.startsWith('__reactProps') && (v = v[k].children)
+            && (v = v.props) && (v = v.deviation) && (v = v.media) && (v = v.types)
+            && (v = v.find(t => t.t === 'fullview')))
+              return base + (
+                v.c ? v.c.replace('<prettyName>', name) : `/v1/fill/w_${v.w},h_${v.h}/${name}-fullview${ext}`
+              ) + tok;
+          return false;
+        },
       }, {
         e: '.dev-view-deviation img',
         s: () => [
